@@ -2,6 +2,7 @@ import './styles.css';
 import { hospitals } from './data/hospitals.js';
 import { sortHospitalsByDistance } from './utils/geo.js';
 
+// ⚠️ ใส่ API Key ของคุณที่นี่ (ตรวจสอบว่าไม่มีเว้นวรรค)
 const GOOGLE_API_KEY = 'AIzaSyADcTaf70pA2x8L4UsjlcKeq1zo3iApyZE';
 
 const defaultPosition = { lat: 13.7563, lng: 100.5018 };
@@ -11,7 +12,6 @@ let searchRadius = 5000;
 let hospitalMarkers = [];
 let userMarker = null;
 let map = null;
-let geocoder = null;
 let directionsService = null;
 let directionsRenderer = null;
 let activeInfoWindow = null;
@@ -78,10 +78,7 @@ const results = document.querySelector('#results');
 radiusSelect.addEventListener('change', async () => {
   searchRadius = Number(radiusSelect.value);
   setLoading(false, `เปลี่ยนระยะค้นหาเป็น ${searchRadius / 1000} กม.`);
-
-  if (userPosition) {
-    await searchNearbyHospitals();
-  }
+  if (userPosition) await searchNearbyHospitals();
 });
 
 loadGoogleMaps()
@@ -91,35 +88,27 @@ loadGoogleMaps()
   })
   .catch((error) => {
     console.error(error);
-    setLoading(false, 'โหลด Google Maps ไม่สำเร็จ ตรวจสอบ API Key');
+    setLoading(false, 'โหลด Google Maps ไม่สำเร็จ');
   });
 
 function loadGoogleMaps() {
   return new Promise((resolve, reject) => {
-    if (window.google && window.google.maps) {
-      resolve();
-      return;
-    }
-
-    if (!GOOGLE_API_KEY || GOOGLE_API_KEY === 'ใส่_API_KEY_ของเธอตรงนี้') {
+    if (window.google && window.google.maps) { resolve(); return; }
+    if (!GOOGLE_API_KEY || GOOGLE_API_KEY.includes('ใส่_API_KEY')) {
       reject(new Error('ยังไม่ได้ใส่ Google API Key'));
       return;
     }
-
     window.initGoogleMapCallback = () => resolve();
-
     const script = document.createElement('script');
     script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_API_KEY}&callback=initGoogleMapCallback&loading=async&libraries=marker&language=th&region=TH`;
     script.async = true;
     script.defer = true;
     script.onerror = () => reject(new Error('โหลด Google Maps script ไม่สำเร็จ'));
-
     document.head.appendChild(script);
   });
 }
 
 function initMap() {
-  geocoder = new google.maps.Geocoder();
   map = new google.maps.Map(document.querySelector('#map'), {
     center: defaultPosition,
     zoom: 12,
@@ -129,52 +118,23 @@ function initMap() {
     fullscreenControl: true,
     zoomControl: true,
   });
-
   directionsService = new google.maps.DirectionsService();
-
   directionsRenderer = new google.maps.DirectionsRenderer({
     map,
     suppressMarkers: false,
     preserveViewport: false,
   });
 }
-function geocodePlaceId(place) {
-  return new Promise((resolve) => {
-    geocoder.geocode({ placeId: place.id }, (results, status) => {
-      if (status === 'OK' && results[0]) {
-        const location = results[0].geometry.location;
-
-        resolve({
-          ...place,
-          location: {
-            latitude: location.lat(),
-            longitude: location.lng(),
-          },
-          formattedAddress: place.formattedAddress || results[0].formatted_address,
-        });
-      } else {
-        console.warn('Geocode failed:', place.displayName?.text, status);
-        resolve(place);
-      }
-    });
-  });
-}
 
 function startSOS() {
   setLoading(true, 'กำลังขอตำแหน่ง GPS...');
-
   if (!navigator.geolocation) {
     setLoading(false, 'Browser นี้ไม่รองรับ GPS');
     return;
   }
-
   navigator.geolocation.getCurrentPosition(
     async (position) => {
-      userPosition = {
-        lat: position.coords.latitude,
-        lng: position.coords.longitude,
-      };
-
+      userPosition = { lat: position.coords.latitude, lng: position.coords.longitude };
       gpsStatus.textContent = 'เปิดแล้ว';
       showUserOnMap();
       await searchNearbyHospitals();
@@ -183,507 +143,194 @@ function startSOS() {
       gpsStatus.textContent = 'ไม่สำเร็จ';
       setLoading(false, `เปิด GPS ไม่สำเร็จ: ${error.message}`);
     },
-    {
-      enableHighAccuracy: true,
-      timeout: 12000,
-      maximumAge: 0,
-    }
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
   );
 }
 
 function is24HourOrEmergency(place) {
   const types = place.types || [];
-
   if (types.includes('emergency_room')) return true;
-
   const hours = place.currentOpeningHours || place.regularOpeningHours;
-
-  if (!hours) return true;
-
+  if (!hours) return false;
   const descriptions = hours.weekdayDescriptions || [];
-
-  const has24h = descriptions.some((d) =>
-    d.includes('ตลอด 24 ชั่วโมง') ||
-    d.toLowerCase().includes('open 24 hours')
-  );
-
-  if (has24h) return true;
-
-  const periods = hours.periods || [];
-
-  const alwaysOpen =
-    periods.length === 1 &&
-    periods[0].open?.day === 0 &&
-    periods[0].open?.hour === 0 &&
-    !periods[0].close;
-
-  if (alwaysOpen) return true;
-
-  return false;
+  return descriptions.some((d) => d.includes('ตลอด 24 ชั่วโมง') || d.toLowerCase().includes('open 24 hours'));
 }
 
 async function searchNearbyHospitals() {
-  if (!userPosition) {
-    setLoading(false, 'กรุณากด SOS เพื่อเปิด GPS ก่อน');
-    return;
-  }
-
-  setLoading(true, `กำลังค้นหาโรงพยาบาลในระยะ ${searchRadius / 1000} กม...`);
-  searchTime.textContent = '—';
-
+  if (!userPosition) return;
+  setLoading(true, `กำลังค้นหาโรงพยาบาลจริง...`);
   const t0 = performance.now();
 
   try {
     const allPlaces = await fetchAllPlaces();
     const elapsed = (performance.now() - t0).toFixed(0);
 
-    let hospitalData = [];
-
-  if (allPlaces.length > 0) {
-  const filtered = allPlaces.filter(is24HourOrEmergency);
-  const selectedPlaces = filtered.length === 0 ? allPlaces : filtered;
-
-  const geocodedPlaces = await Promise.all(
-    selectedPlaces.map((place) => geocodePlaceId(place))
-  );
-
-  hospitalData = geocodedPlaces.map(mapPlaceToHospital);
-} else {
-  hospitalData = hospitals;
-}
-    displayResults(hospitalData, elapsed, allPlaces.length === 0);
+    // ถ้า Google API มีข้อมูล (ต่อให้กรองแล้วเหลือ 0 ก็ตาม) จะไม่ไปใช้ hospitals.js
+    if (allPlaces) {
+      const hospitalData = allPlaces.map(place => ({
+        id: place.id,
+        name: place.displayName?.text || 'ไม่ทราบชื่อ',
+        address: place.formattedAddress || '-',
+        phone: place.nationalPhoneNumber || '-',
+        lat: place.location.latitude,
+        lng: place.location.longitude,
+        googleMapsUri: place.googleMapsUri,
+        hasEmergency: (place.types || []).includes('emergency_room'),
+        is24h: is24HourOrEmergency(place)
+      }));
+      displayResults(hospitalData, elapsed, false);
+    } else {
+      // กรณี API ขัดข้องจริงๆ เท่านั้นถึงจะใช้ Fallback
+      displayResults(hospitals, elapsed, true);
+    }
   } catch (error) {
-    console.error(error);
-
-    const elapsed = (performance.now() - t0).toFixed(0);
-    displayResults(hospitals, elapsed, true);
-    setLoading(false, `ค้นหาไม่สำเร็จ ใช้ข้อมูล default แทน — ${elapsed} ms`);
+    console.error("API Error:", error);
+    displayResults(hospitals, 0, true);
   }
 }
 
 async function fetchAllPlaces() {
-  const FIELD_MASK =
-    'places.id,places.displayName,places.formattedAddress,' +
-    'places.location,places.googleMapsUri,places.nationalPhoneNumber,' +
-    'places.types,places.primaryType,' +
-    'places.currentOpeningHours,places.regularOpeningHours,' +
-    'nextPageToken';
-
-  const baseBody = {
-    includedPrimaryTypes: ['hospital'],
-    maxResultCount: 20,
+  const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri,places.nationalPhoneNumber,places.types,places.currentOpeningHours,places.regularOpeningHours';
+  
+  const body = {
+    includedPrimaryTypes: ['hospital'], 
+    maxResultCount: 20, // ลองที่ 20 ก่อนเพื่อความเสถียร
     rankPreference: 'DISTANCE',
     locationRestriction: {
       circle: {
-        center: {
-          latitude: userPosition.lat,
-          longitude: userPosition.lng,
-        },
+        center: { latitude: userPosition.lat, longitude: userPosition.lng },
         radius: searchRadius,
       },
     },
     languageCode: 'th',
   };
 
-  let allPlaces = [];
-  let pageToken = null;
-  let page = 0;
-  const MAX_PAGES = 3;
-
-  do {
-    const body = pageToken ? { ...baseBody, pageToken } : baseBody;
-
-    setLoading(true, `กำลังดึงข้อมูล... หน้า ${page + 1}/${MAX_PAGES}`);
-
-    const res = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': GOOGLE_API_KEY,
-        'X-Goog-FieldMask': FIELD_MASK,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error?.message || 'Places API error');
-    }
-
-    allPlaces = allPlaces.concat(data.places || []);
-    pageToken = data.nextPageToken || null;
-    page++;
-
-    if (pageToken && page < MAX_PAGES) {
-      await sleep(500);
-    }
-  } while (pageToken && page < MAX_PAGES);
-
-  return allPlaces;
-}
-async function fetchPlaceDetails(placeId) {
-  const res = await fetch(`https://places.googleapis.com/v1/places/${placeId}`, {
-    method: 'GET',
+  const res = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': GOOGLE_API_KEY,
-      'X-Goog-FieldMask':
-        'id,displayName,formattedAddress,location,googleMapsUri,nationalPhoneNumber,types,primaryType,currentOpeningHours,regularOpeningHours'
-    }
+      'X-Goog-FieldMask': FIELD_MASK,
+    },
+    body: JSON.stringify(body),
   });
 
   const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || 'Places API error');
+  
+  let resultsList = data.places || [];
 
-  if (!res.ok) {
-    console.warn('Place Details error:', data.error?.message || data);
-    return null;
-  }
-
-  return data;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function mapPlaceToHospital(place) {
-  const types = place.types || [];
-  const hours = place.currentOpeningHours || place.regularOpeningHours;
-  const descriptions = hours?.weekdayDescriptions || [];
-  const periods = hours?.periods || [];
-
-  const hasEmergency = types.includes('emergency_room');
-
-  const is24h =
-    descriptions.some((d) =>
-      d.includes('ตลอด 24 ชั่วโมง') ||
-      d.toLowerCase().includes('open 24 hours')
-    ) ||
-    (
-      periods.length === 1 &&
-      periods[0].open?.day === 0 &&
-      periods[0].open?.hour === 0 &&
-      !periods[0].close
-    );
-
-  return {
-    id: place.id,
-    name: place.displayName?.text || 'ไม่ทราบชื่อโรงพยาบาล',
-    address: place.formattedAddress || 'ไม่พบที่อยู่',
-    phone: place.nationalPhoneNumber || '-',
-    lat: place.location.latitude,
-    lng: place.location.longitude,
-    googleMapsUri: place.googleMapsUri,
-    hasEmergency,
-    is24h,
-    primaryType: place.primaryType,
-    types,
-  };
+  // กรองเฉพาะที่เป็นโรงพยาบาลจริงๆ (ตัดพวกหน่วยงานย่อยออก)
+  const excludeKeywords = ['สำนัก', 'โภชนาการ', 'โรงอาหาร', 'คณะ', 'หอพัก', 'ตึก', 'อาคารเรียน', 'สถาบันเทคโนโลยี'];
+  return resultsList.filter(place => {
+    const name = place.displayName?.text || '';
+    return !excludeKeywords.some(keyword => name.includes(keyword));
+  });
 }
 
 function displayResults(hospitalData, elapsed, isFallback = false) {
   const sorted = sortHospitalsByDistance(hospitalData, userPosition)
-    .filter((hospital) => hospital.distance * 1000 <= searchRadius);
-
-  const nearest = sorted[0];
+    .filter((h) => h.distance * 1000 <= searchRadius);
 
   foundCount.textContent = sorted.length;
-  nearestDistance.textContent = nearest ? `${nearest.distance.toFixed(2)} กม.` : '—';
-  searchTime.textContent = elapsed ? `${elapsed} ms` : '—';
+  nearestDistance.textContent = sorted[0] ? `${sorted[0].distance.toFixed(2)} กม.` : '—';
+  searchTime.textContent = `${elapsed} ms`;
 
   renderHospitalCards(sorted);
   renderHospitalMarkers(sorted);
   fitMapToResults();
-
-  if (sorted.length === 0) {
-    setLoading(false, `ไม่พบโรงพยาบาลในระยะ ${searchRadius / 1000} กม.`);
-    return;
-  }
-
-  if (isFallback) {
-    setLoading(false, `แสดงข้อมูล default เฉพาะในระยะ ${searchRadius / 1000} กม. จำนวน ${sorted.length} แห่ง`);
+  
+  if (sorted.length > 0) {
+    setLoading(false, isFallback ? "⚠️ ใช้ข้อมูลสำรอง (Check API)" : "✅ ข้อมูลสดจาก Google");
   } else {
-    setLoading(false, `ค้นหาสำเร็จ พบโรงพยาบาลในระยะ ${searchRadius / 1000} กม. จำนวน ${sorted.length} แห่ง`);
+    results.innerHTML = '<div class="empty">ไม่พบโรงพยาบาลในระยะที่เลือก</div>';
+    setLoading(false, "ค้นหาเสร็จสิ้น");
   }
 }
 
 function showUserOnMap() {
-  if (userMarker) {
-    userMarker.map = null;
-  }
-
+  if (userMarker) userMarker.map = null;
   const { AdvancedMarkerElement } = google.maps.marker;
-
   const dot = document.createElement('div');
-  dot.style.cssText = `
-    width:18px;
-    height:18px;
-    border-radius:50%;
-    background:#2563eb;
-    border:3px solid #fff;
-    box-shadow:0 0 0 2px #2563eb;
-  `;
-
-  userMarker = new AdvancedMarkerElement({
-    position: userPosition,
-    map,
-    title: 'ตำแหน่งของคุณ',
-    content: dot,
-  });
-
-  const infoWindow = new google.maps.InfoWindow({
-    content: '<strong>ตำแหน่งของคุณ</strong>',
-  });
-
-  userMarker.addListener('click', () => {
-    if (activeInfoWindow) activeInfoWindow.close();
-    infoWindow.open(map, userMarker);
-    activeInfoWindow = infoWindow;
-  });
-
+  dot.style.cssText = `width:20px;height:20px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 8px rgba(0,0,0,0.3);`;
+  userMarker = new AdvancedMarkerElement({ position: userPosition, map, content: dot });
   map.setCenter(userPosition);
-  map.setZoom(14);
 }
 
 function renderHospitalCards(data) {
-  if (!data.length) {
-    results.innerHTML = '<div class="empty">ไม่พบโรงพยาบาลในระยะที่เลือก</div>';
-    return;
-  }
+  if (!data.length) return;
+  results.innerHTML = data.map((h, i) => {
+    const isNearest = i === 0;
+    // สร้าง Google Maps URL แบบนำทางจริง
+    const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lng}&destination_place_id=${h.id}`;
+    
+    return `
+      <article class="hospital-card ${isNearest ? 'nearest' : ''}" data-index="${i}">
+        ${isNearest ? '<div class="nearest-label">● ใกล้ที่สุด</div>' : ''}
+        <div class="card-top"><h3>${h.name}</h3><div class="distance">${h.distance.toFixed(2)} กม.</div></div>
+        <div class="badges">
+          ${h.hasEmergency ? '<span class="badge badge-emergency">🚨 ฉุกเฉิน</span>' : ''}
+          ${h.is24h ? '<span class="badge badge-24h">⏰ 24 ชม.</span>' : ''}
+        </div>
+        <div class="address">${h.address}</div>
+        <div class="actions">
+          <button class="action navigate" data-index="${i}">🗺 นำทาง</button>
+          <a class="action map" href="${googleMapsUrl}" target="_blank">↗ Google Maps</a>
+          <a class="action call" href="tel:${h.phone}">📞 โทร</a>
+        </div>
+      </article>
+    `;
+  }).join('');
 
-  results.innerHTML = data
-    .map((hospital, index) => {
-      const directionUrl = `https://www.google.com/maps/dir/?api=1&destination_place_id=${hospital.id}&destination=${encodeURIComponent(hospital.name)}`;
-
-      const viewUrl =
-        hospital.googleMapsUri ||
-        `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(hospital.name)}`;
-
-      const isNearest = index === 0;
-      const etaMin = hospital.distance > 0 ? Math.ceil((hospital.distance / 40) * 60) : '—';
-
-      const badges = [];
-
-      if (hospital.hasEmergency) {
-        badges.push(`<span class="badge badge-emergency">🚨 ฉุกเฉิน</span>`);
-      }
-
-      if (hospital.is24h) {
-        badges.push(`<span class="badge badge-24h">⏰ เปิด 24 ชม.</span>`);
-      }
-
-      return `
-        <article class="hospital-card ${isNearest ? 'nearest' : ''}" data-index="${index}">
-          ${isNearest ? '<div class="nearest-label">● ใกล้ที่สุด</div>' : ''}
-          <div class="card-top">
-            <h3>${hospital.name}</h3>
-            <div class="distance">${hospital.distance.toFixed(2)} กม.</div>
-          </div>
-
-          ${badges.length ? `<div class="badges">${badges.join('')}</div>` : ''}
-
-          <div class="address">${hospital.address}</div>
-          <div class="eta">⏱ เวลาเดินทางโดยประมาณ ~${etaMin} นาที</div>
-
-          <div class="actions">
-            <button class="action navigate" data-index="${index}">🗺 นำทางในเว็บ</button>
-            <a class="action map" href="${directionUrl}" target="_blank">↗ Google Maps</a>
-            <a class="action view" href="${viewUrl}" target="_blank">ดูสถานที่</a>
-            <a class="action call" href="tel:${hospital.phone}">📞 ${hospital.phone}</a>
-          </div>
-        </article>
-      `;
-    })
-    .join('');
-
-  document.querySelectorAll('.hospital-card').forEach((card) => {
+  document.querySelectorAll('.hospital-card').forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.actions')) return;
-
-      const index = Number(card.dataset.index);
-      focusHospital(data[index]);
+      if (!e.target.closest('.actions')) focusHospital(data[card.dataset.index]);
     });
   });
-
-  document.querySelectorAll('.action.navigate').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-
-      const index = Number(btn.dataset.index);
-      showRouteOnMap(data[index]);
-    });
+  document.querySelectorAll('.action.navigate').forEach(btn => {
+    btn.addEventListener('click', () => showRouteOnMap(data[btn.dataset.index]));
   });
 }
 
 function showRouteOnMap(hospital) {
-  if (!hospital || !userPosition) return;
-
-  setLoading(true, `กำลังนำทางไป ${hospital.name}...`);
-
-  if (!directionsService || !directionsRenderer) {
-    setLoading(false, 'ระบบนำทางยังไม่พร้อม');
-    return;
-  }
-
-  directionsService.route(
-    {
-      origin: new google.maps.LatLng(userPosition.lat, userPosition.lng),
-
-      destination: {
-        placeId: hospital.id,
-      },
-
-      travelMode: google.maps.TravelMode.DRIVING,
-      provideRouteAlternatives: false,
-    },
-    (result, status) => {
-      if (status !== 'OK' || !result) {
-        console.warn('DirectionsService placeId error:', status);
-
-        directionsService.route(
-          {
-            origin: new google.maps.LatLng(userPosition.lat, userPosition.lng),
-
-            destination: new google.maps.LatLng(hospital.lat, hospital.lng),
-
-            travelMode: google.maps.TravelMode.DRIVING,
-            provideRouteAlternatives: false,
-          },
-          (fallbackResult, fallbackStatus) => {
-            if (fallbackStatus !== 'OK' || !fallbackResult) {
-              console.warn('DirectionsService lat/lng error:', fallbackStatus);
-
-              setLoading(false, 'นำทางในเว็บไม่สำเร็จ กำลังเปิด Google Maps แทน');
-
-              window.open(
-                `https://www.google.com/maps/dir/?api=1&destination_place_id=${hospital.id}&destination=${encodeURIComponent(hospital.name)}`,
-                '_blank'
-              );
-
-              return;
-            }
-
-            directionsRenderer.setDirections(fallbackResult);
-
-            const leg = fallbackResult.routes[0].legs[0];
-
-            setLoading(
-              false,
-              `นำทางไป ${hospital.name} — ${leg.distance.text} ประมาณ ${leg.duration.text}`
-            );
-          }
-        );
-
-        return;
-      }
-
+  directionsService.route({
+    origin: userPosition,
+    destination: { lat: hospital.lat, lng: hospital.lng },
+    travelMode: google.maps.TravelMode.DRIVING,
+  }, (result, status) => {
+    if (status === 'OK') {
       directionsRenderer.setDirections(result);
-
-      const leg = result.routes[0].legs[0];
-
-      setLoading(
-        false,
-        `นำทางไป ${hospital.name} — ${leg.distance.text} ประมาณ ${leg.duration.text}`
-      );
     }
-  );
+  });
 }
 
 function renderHospitalMarkers(data) {
-  hospitalMarkers.forEach((marker) => {
-    marker.map = null;
-  });
-
+  hospitalMarkers.forEach(m => m.map = null);
   hospitalMarkers = [];
-
-  if (directionsRenderer) {
-    directionsRenderer.setDirections({ routes: [] });
-  }
+  if (directionsRenderer) directionsRenderer.setDirections({ routes: [] });
 
   const { AdvancedMarkerElement, PinElement } = google.maps.marker;
-
-  data.forEach((hospital, index) => {
-    const isNearest = index === 0;
-
+  data.forEach((h, i) => {
     const pin = new PinElement({
-      glyph: isNearest ? '★' : `${index + 1}`,
-      glyphColor: '#ffffff',
-      background: isNearest ? '#dc2626' : '#ef4444',
-      borderColor: '#ffffff',
-      scale: isNearest ? 1.3 : 1.0,
+      glyph: i === 0 ? '★' : `${i + 1}`,
+      background: i === 0 ? '#dc2626' : '#ef4444',
+      borderColor: '#fff',
     });
-
-    const marker = new AdvancedMarkerElement({
-      position: new google.maps.LatLng(hospital.lat, hospital.lng),
-      map,
-      title: hospital.name,
-      content: pin.element,
-    });
-
-    const infoWindow = new google.maps.InfoWindow({
-      content: `
-        <div style="max-width:220px;font-family:sans-serif">
-          <strong>${hospital.name}</strong><br>
-          ${hospital.distance.toFixed(2)} กม. จากคุณ<br>
-          ${hospital.address}<br>
-          โทร: ${hospital.phone}<br>
-          <button
-            onclick="window._navigateToHospital(${index})"
-            style="margin-top:6px;padding:4px 10px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer">
-            นำทางในเว็บ
-          </button>
-        </div>
-      `,
-    });
-
-    marker.addListener('click', () => {
-      if (activeInfoWindow) activeInfoWindow.close();
-
-      infoWindow.open(map, marker);
-      activeInfoWindow = infoWindow;
-    });
-
-    if (isNearest) {
-      infoWindow.open(map, marker);
-      activeInfoWindow = infoWindow;
-    }
-
+    const marker = new AdvancedMarkerElement({ position: { lat: h.lat, lng: h.lng }, map, content: pin.element });
     hospitalMarkers.push(marker);
   });
-
-  window._navigateToHospital = (index) => {
-    if (data[index]) {
-      showRouteOnMap(data[index]);
-    }
-  };
 }
 
-function focusHospital(hospital) {
-  if (!hospital) return;
-
-  map.setCenter({
-    lat: hospital.lat,
-    lng: hospital.lng,
-  });
-
+function focusHospital(h) {
+  map.setCenter({ lat: h.lat, lng: h.lng });
   map.setZoom(16);
 }
 
 function fitMapToResults() {
   const bounds = new google.maps.LatLngBounds();
-
-  if (userPosition) {
-    bounds.extend(userPosition);
-  }
-
-  hospitalMarkers.forEach((marker) => {
-    bounds.extend(marker.position);
-  });
-
-  if (!bounds.isEmpty()) {
-    map.fitBounds(bounds, 80);
-  }
+  if (userPosition) bounds.extend(userPosition);
+  hospitalMarkers.forEach(m => bounds.extend(m.position));
+  if (!bounds.isEmpty()) map.fitBounds(bounds, 80);
 }
 
 function setLoading(isLoading, message) {
