@@ -242,7 +242,7 @@ body {
 .action.map { background: var(--blue); color: var(--white); }
 .action.call { background: var(--red); color: var(--white); }
 .action.view { background: var(--blue-soft); color: var(--blue-dark); }
-
+.action.navigate {background: var(--blue-soft); color: var(--blue-dark); }
 .map-panel { position: relative; }
 #map { width: 100%; height: 100vh; }
 
