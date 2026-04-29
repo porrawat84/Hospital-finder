@@ -220,11 +220,35 @@ async function fetchAllPlaces() {
   
   let resultsList = data.places || [];
 
-  // กรองเฉพาะที่เป็นโรงพยาบาลจริงๆ (ตัดพวกหน่วยงานย่อยออก)
-  const excludeKeywords = ['สำนัก', 'โภชนาการ', 'โรงอาหาร', 'คณะ', 'หอพัก', 'ตึก', 'อาคารเรียน', 'สถาบันเทคโนโลยี'];
+  // คำที่ต้องมีในชื่อ — อย่างน้อยหนึ่งอย่าง
+  const includeKeywords = ['โรงพยาบาล', 'hospital', 'รพ.', 'medical center', 'ศูนย์การแพทย์', 'สถาบันการแพทย์'];
+
+  // คำต้องห้าม — ถ้ามีตัดออกเลย
+  const excludeKeywords = [
+    'สำนัก', 'โภชนาการ', 'โรงอาหาร', 'คณะ', 'หอพัก', 'ตึก', 'อาคาร',
+    'สถาบันเทคโนโลยี', 'คลินิก', 'clinic', 'ร้านขายยา', 'pharmacy',
+    'ทันตกรรม', 'dental', 'สัตวแพทย์', 'veterinary', 'ห้อง', 'แผนก',
+    'กอง', 'ฝ่าย', 'ศูนย์สุขภาพชุมชน', 'สุขศาลา', 'สถานีอนามัย',
+    'PCU', 'สสช.', 'รพ.สต.', 'โรงเรียน', 'มหาวิทยาลัย',
+  ];
+
+  // ต้อง type = hospital เท่านั้น
+  const validTypes = ['hospital'];
+
   return resultsList.filter(place => {
-    const name = place.displayName?.text || '';
-    return !excludeKeywords.some(keyword => name.includes(keyword));
+    const name = (place.displayName?.text || '').toLowerCase();
+    const types = place.types || [];
+
+    // ต้องมี type ที่ถูกต้อง
+    if (!types.some(t => validTypes.includes(t))) return false;
+
+    // ต้องมีคำที่บ่งชี้ว่าเป็นโรงพยาบาล
+    if (!includeKeywords.some(k => name.includes(k.toLowerCase()))) return false;
+
+    // ต้องไม่มีคำต้องห้าม
+    if (excludeKeywords.some(k => name.includes(k.toLowerCase()))) return false;
+
+    return true;
   });
 }
 
